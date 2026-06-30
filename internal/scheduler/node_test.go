@@ -36,3 +36,19 @@ func TestScheduler_BasicSchedule(t *testing.T) {
 	}
 
 }
+
+func TestScheduler_EmptyTaskList(t *testing.T) {
+	jobList, workerList := []*Job{}, []*Worker{}
+
+	workerList = append(workerList, newWorker("worker one"))
+	workerList = append(workerList, newWorker("worker two"))
+	workerList = append(workerList, newWorker("worker three"))
+
+	currNode := newNode(jobList, workerList)
+	err := scheduleTasks(currNode)
+
+	if err == nil {
+		t.Errorf("expected error, got %d", err)
+	}
+
+}

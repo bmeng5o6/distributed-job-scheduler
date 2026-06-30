@@ -16,10 +16,6 @@ func newWorker(name string) *Worker {
 	}
 }
 
-func setJob(worker *Worker, job *Job) {
-	worker.currJob = job
-}
-
 func runJob(worker *Worker) error {
 	if worker.currJob == nil {
 		return errors.New("Worker had no job, runJob called")
