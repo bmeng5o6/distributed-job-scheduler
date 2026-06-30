@@ -16,7 +16,9 @@ func TestScheduler_BasicSchedule(t *testing.T) {
 	workerList = append(workerList, newWorker("worker three"))
 
 	currNode := newNode(jobList, workerList)
-	scheduleTasks(currNode)
+	currNode.wg.Add(len(jobList))
+	currNode.start()
+	currNode.wg.Wait()
 
 	for i := range workerList {
 		worker := workerList[i]
@@ -33,22 +35,6 @@ func TestScheduler_BasicSchedule(t *testing.T) {
 
 	if len(currNode.tasks) != 0 {
 		t.Errorf("expected jobList empty and workerList all free, did not get")
-	}
-
-}
-
-func TestScheduler_EmptyTaskList(t *testing.T) {
-	jobList, workerList := []*Job{}, []*Worker{}
-
-	workerList = append(workerList, newWorker("worker one"))
-	workerList = append(workerList, newWorker("worker two"))
-	workerList = append(workerList, newWorker("worker three"))
-
-	currNode := newNode(jobList, workerList)
-	err := scheduleTasks(currNode)
-
-	if err == nil {
-		t.Errorf("expected error, got %d", err)
 	}
 
 }

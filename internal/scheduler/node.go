@@ -1,12 +1,15 @@
 package scheduler
 
 import (
-	"errors"
+	"log"
+	"sync"
 )
 
 type Node struct {
 	tasks   []*Job
 	workers []*Worker
+	mu      sync.RWMutex
+	wg      sync.WaitGroup
 }
 
 func newNode(tasks []*Job, workers []*Worker) *Node {
@@ -15,30 +18,39 @@ func newNode(tasks []*Job, workers []*Worker) *Node {
 	}
 }
 
-func scheduleTasks(node *Node) error {
+func (node *Node) pullJob() *Job {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+
 	if len(node.tasks) == 0 {
-		return errors.New("No jobs in tasks")
+		return nil
 	}
 
-	for len(node.tasks) > 0 {
-		currTask := node.tasks[0]
-		assigned := false
-		for i := range node.workers {
-			if node.workers[i].currJob == nil {
-				node.workers[i].currJob = currTask
-				assigned = true
-				runJob(node.workers[i])
+	job := node.tasks[0]
+	node.tasks = node.tasks[1:]
+	return job
+}
 
-				break
-			}
+func (node *Node) runWorker(worker *Worker) {
+	for {
+		currJob := node.pullJob()
+		if currJob == nil {
+			return
 		}
 
-		if !assigned {
-			return errors.New("No workers available")
-		}
+		worker.currJob = currJob
+		worker.currJob.state = StateRunning
 
-		node.tasks = node.tasks[1:]
+		log.Println("running task")
+
+		worker.currJob.state = StateDone
+		worker.currJob = nil
+		node.wg.Done()
 	}
+}
 
-	return nil
+func (node *Node) start() {
+	for i := range node.workers {
+		go node.runWorker(node.workers[i])
+	}
 }
