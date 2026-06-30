@@ -1,12 +1,21 @@
 package scheduler
 
 type Job struct {
-	cleared bool
-	task    string
+	state State
+	task  string
 }
+
+type State string
+
+const (
+	StatePending State = "pending"
+	StateRunning State = "running"
+	StateDone    State = "done"
+	StateFailed  State = "failed"
+)
 
 func newJob(task string) *Job {
 	return &Job{
-		cleared: false, task: task,
+		state: StatePending, task: task,
 	}
 }
