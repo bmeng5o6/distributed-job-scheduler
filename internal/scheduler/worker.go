@@ -1,18 +1,18 @@
 package scheduler
 
 import (
-	"sync"
+	"time"
 )
 
 type Worker struct {
-	name    string
-	currJob *Job
-	mu      sync.Mutex
-	cnt     int32
+	name     string
+	currJob  *Job
+	lastBeat time.Time
+	alive    bool
 }
 
 func newWorker(name string) *Worker {
 	return &Worker{
-		name: name, currJob: nil, cnt: 0,
+		name: name, currJob: nil, alive: true,
 	}
 }

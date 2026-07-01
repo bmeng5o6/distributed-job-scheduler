@@ -1,8 +1,14 @@
 package scheduler
 
+import (
+	"time"
+)
+
 type Job struct {
-	state State
-	task  string
+	state    State
+	task     string
+	epoch    int
+	duration time.Duration
 }
 
 type State string
@@ -14,8 +20,8 @@ const (
 	StateFailed  State = "failed"
 )
 
-func newJob(task string) *Job {
+func newJob(task string, duration time.Duration) *Job {
 	return &Job{
-		state: StatePending, task: task,
+		state: StatePending, task: task, duration: duration,
 	}
 }
