@@ -6,24 +6,36 @@ import (
 )
 
 type Node struct {
-	tasks   []*Job
-	workers []*Worker
-	mu      sync.Mutex
-	wg      sync.WaitGroup
+	tasks     []*Job
+	deadTasks []*Job
+	workers   []*Worker
+	mu        sync.Mutex
+	cond      *sync.Cond
+	wg        sync.WaitGroup
 }
 
 func newNode(tasks []*Job, workers []*Worker) *Node {
-	return &Node{
-		tasks: tasks, workers: workers,
-	}
+	n := &Node{tasks: tasks, workers: workers}
+	n.cond = sync.NewCond(&n.mu)
+	return n
+}
+
+func (node *Node) pushJob(job *Job) {
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	node.tasks = append(node.tasks, job)
+
+	// signal to wake sleeping workers
+	node.cond.Signal()
+
 }
 
 func (node *Node) pullJob() *Job {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 
-	if len(node.tasks) == 0 {
-		return nil
+	for len(node.tasks) == 0 {
+		node.cond.Wait()
 	}
 
 	job := node.tasks[0]
@@ -31,13 +43,23 @@ func (node *Node) pullJob() *Job {
 	return job
 }
 
+// won't need lock
+func (node *Node) retryJob(worker *Worker, job *Job) {
+	job.attempt++
+	if job.attempt >= 3 {
+		job.state = StateFailed
+		node.deadTasks = append(node.deadTasks, job)
+		worker.currJob = nil
+	}
+}
+
 func (node *Node) runWorker(worker *Worker) {
 	for {
 		currJob := node.pullJob()
-		if currJob == nil {
-			return
-		}
 
+		// epoch is used to stop jobs from being marked done more than once.
+		// checks whether the epoch of job matches epoch of worker.
+		// if not equal, then do not mark as done to prevent duplicates
 		node.mu.Lock()
 		currEpoch := currJob.epoch
 		worker.lastBeat = time.Now()
@@ -46,26 +68,31 @@ func (node *Node) runWorker(worker *Worker) {
 		worker.currJob.state = StateRunning
 		node.mu.Unlock()
 
-		endTime := time.Now().Add(currJob.duration)
-
-		// Loop through times before endTime (task finishes)
-		// if worker is dead, return, else send a heartbeat.
-		for time.Now().Before(endTime) {
-			node.mu.Lock()
-			if !worker.alive {
-				node.mu.Unlock()
-				return
-			}
-			worker.lastBeat = time.Now()
-			node.mu.Unlock()
-			time.Sleep(10 * time.Millisecond)
-		}
+		err := currJob.run()
+		// node.mu.Lock()
+		// if curr
+		// // Loop through times before endTime (task finishes)
+		// // if worker is dead, return, else send a heartbeat.
+		// for time.Now().Before(endTime) {
+		// 	node.mu.Lock()
+		// 	if !worker.alive {
+		// 		node.mu.Unlock()
+		// 		return
+		// 	}
+		// 	worker.lastBeat = time.Now()
+		// 	node.mu.Unlock()
+		// 	time.Sleep(10 * time.Millisecond)
+		// }
 
 		node.mu.Lock()
 		if currJob.epoch == currEpoch {
-			currJob.state = StateDone
-			worker.currJob = nil
-			node.wg.Done()
+			if err != nil {
+				node.retryJob(worker, currJob)
+			} else {
+				currJob.state = StateDone
+				worker.currJob = nil
+				node.wg.Done()
+			}
 		}
 		node.mu.Unlock()
 	}
@@ -86,10 +113,20 @@ func (node *Node) monitor(timeout time.Duration, interval time.Duration) {
 			if time.Since(lastBeat) > timeout && node.workers[i].currJob != nil {
 				currJob := node.workers[i].currJob
 
+				// doesn't call pullJob since lock is held here.
+				currJob.attempt++
+				if currJob.attempt >= 3 {
+					currJob.state = StateFailed
+					node.deadTasks = append(node.deadTasks, currJob)
+					node.workers[i].currJob = nil
+					continue
+				}
+
 				node.tasks = append(node.tasks, currJob)
 				currJob.epoch++
 				currJob.state = StatePending
 				node.workers[i].currJob = nil
+				node.cond.Signal()
 			}
 		}
 		node.mu.Unlock()

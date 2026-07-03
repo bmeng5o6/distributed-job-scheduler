@@ -5,10 +5,11 @@ import (
 )
 
 type Job struct {
-	state    State
-	task     string
-	epoch    int
-	duration time.Duration
+	state   State
+	task    string
+	epoch   int
+	attempt int
+	run     func() error
 }
 
 type State string
@@ -20,8 +21,8 @@ const (
 	StateFailed  State = "failed"
 )
 
-func newJob(task string, duration time.Duration) *Job {
+func newJob(task string, duration time.Duration, run func() error) *Job {
 	return &Job{
-		state: StatePending, task: task, duration: duration,
+		state: StatePending, task: task, run: run,
 	}
 }
