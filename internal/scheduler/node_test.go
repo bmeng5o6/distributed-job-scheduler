@@ -8,9 +8,9 @@ import (
 func TestScheduler_BasicSchedule(t *testing.T) {
 	jobList, workerList := []*Job{}, []*Worker{}
 
-	jobList = append(jobList, newJob("task one", 100*time.Millisecond))
-	jobList = append(jobList, newJob("task two", 100*time.Millisecond))
-	jobList = append(jobList, newJob("task three", 100*time.Millisecond))
+	jobList = append(jobList, newJob("task one", 100*time.Millisecond, 1))
+	jobList = append(jobList, newJob("task two", 100*time.Millisecond, 1))
+	jobList = append(jobList, newJob("task three", 100*time.Millisecond, 1))
 
 	workerList = append(workerList, newWorker("worker one"))
 	workerList = append(workerList, newWorker("worker two"))
@@ -40,12 +40,12 @@ func TestScheduler_BasicSchedule(t *testing.T) {
 
 }
 
-func TestSCheduler_WorkerDeath(t *testing.T) {
+func TestScheduler_WorkerDeath(t *testing.T) {
 	jobList, workerList := []*Job{}, []*Worker{}
 
-	jobList = append(jobList, newJob("task one", 100*time.Millisecond))
-	jobList = append(jobList, newJob("task two", 100*time.Millisecond))
-	jobList = append(jobList, newJob("task three", 100*time.Millisecond))
+	jobList = append(jobList, newJob("task one", 100*time.Millisecond, 1))
+	jobList = append(jobList, newJob("task two", 100*time.Millisecond, 1))
+	jobList = append(jobList, newJob("task three", 100*time.Millisecond, 1))
 
 	workerList = append(workerList, newWorker("worker one"))
 	workerList = append(workerList, newWorker("worker two"))
@@ -79,4 +79,34 @@ func TestSCheduler_WorkerDeath(t *testing.T) {
 		t.Errorf("expected jobList empty and workerList all free, did not get")
 	}
 
+}
+
+func TestScheduler_RetryAndDeadLetter(t *testing.T) {
+	jobList, workerList := []*Job{}, []*Worker{}
+
+	retryJob := newJob("retry", 100*time.Millisecond, 2)
+	failJob := newJob("fail", 100*time.Millisecond, 10)
+
+	jobList = append(jobList, retryJob)
+	jobList = append(jobList, failJob)
+
+	workerList = append(workerList, newWorker("worker one"))
+	workerList = append(workerList, newWorker("worker two"))
+
+	currNode := newNode(jobList, workerList)
+	currNode.wg.Add(len(jobList))
+	currNode.start()
+	currNode.wg.Wait()
+
+	if retryJob.state != StateDone {
+		t.Errorf("Retry job: expected done, got %s", retryJob.state)
+	}
+
+	if failJob.state != StateFailed {
+		t.Errorf("Fail job: expected fail, got %s", retryJob.state)
+	}
+
+	if len(currNode.deadTasks) != 1 {
+		t.Errorf("Expected one dead task, got %d", len(currNode.deadTasks))
+	}
 }

@@ -5,11 +5,12 @@ import (
 )
 
 type Job struct {
-	state   State
-	task    string
-	epoch   int
-	attempt int
-	run     func() error
+	state     State
+	task      string
+	duration  time.Duration
+	epoch     int
+	attempt   int
+	failCount int // number of times a job needs to be run to succeed. This is an attempt at running an actual job.
 }
 
 type State string
@@ -21,8 +22,8 @@ const (
 	StateFailed  State = "failed"
 )
 
-func newJob(task string, duration time.Duration, run func() error) *Job {
+func newJob(task string, duration time.Duration, failCount int) *Job {
 	return &Job{
-		state: StatePending, task: task, run: run,
+		state: StatePending, task: task, duration: duration, failCount: failCount,
 	}
 }

@@ -46,11 +46,20 @@ func (node *Node) pullJob() *Job {
 // won't need lock
 func (node *Node) retryJob(worker *Worker, job *Job) {
 	job.attempt++
+	worker.currJob = nil
+
+	// max number of retries is 3
 	if job.attempt >= 3 {
 		job.state = StateFailed
 		node.deadTasks = append(node.deadTasks, job)
-		worker.currJob = nil
+		node.wg.Done()
+		return
 	}
+
+	job.state = StatePending
+	job.epoch++
+	node.tasks = append(node.tasks, job)
+	node.cond.Signal()
 }
 
 func (node *Node) runWorker(worker *Worker) {
@@ -65,28 +74,28 @@ func (node *Node) runWorker(worker *Worker) {
 		worker.lastBeat = time.Now()
 
 		worker.currJob = currJob
-		worker.currJob.state = StateRunning
+		currJob.state = StateRunning
 		node.mu.Unlock()
 
-		err := currJob.run()
-		// node.mu.Lock()
-		// if curr
-		// // Loop through times before endTime (task finishes)
-		// // if worker is dead, return, else send a heartbeat.
-		// for time.Now().Before(endTime) {
-		// 	node.mu.Lock()
-		// 	if !worker.alive {
-		// 		node.mu.Unlock()
-		// 		return
-		// 	}
-		// 	worker.lastBeat = time.Now()
-		// 	node.mu.Unlock()
-		// 	time.Sleep(10 * time.Millisecond)
-		// }
+		duration := currJob.duration
+		endTime := time.Now().Add(duration)
+
+		// Loop through times before endTime (task finishes)
+		// if worker is dead, return, else send a heartbeat.
+		for time.Now().Before(endTime) {
+			node.mu.Lock()
+			if !worker.alive {
+				node.mu.Unlock()
+				return
+			}
+			worker.lastBeat = time.Now()
+			node.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+		}
 
 		node.mu.Lock()
 		if currJob.epoch == currEpoch {
-			if err != nil {
+			if currJob.attempt < currJob.failCount {
 				node.retryJob(worker, currJob)
 			} else {
 				currJob.state = StateDone
@@ -111,22 +120,7 @@ func (node *Node) monitor(timeout time.Duration, interval time.Duration) {
 		for i := range node.workers {
 			lastBeat := node.workers[i].lastBeat
 			if time.Since(lastBeat) > timeout && node.workers[i].currJob != nil {
-				currJob := node.workers[i].currJob
-
-				// doesn't call pullJob since lock is held here.
-				currJob.attempt++
-				if currJob.attempt >= 3 {
-					currJob.state = StateFailed
-					node.deadTasks = append(node.deadTasks, currJob)
-					node.workers[i].currJob = nil
-					continue
-				}
-
-				node.tasks = append(node.tasks, currJob)
-				currJob.epoch++
-				currJob.state = StatePending
-				node.workers[i].currJob = nil
-				node.cond.Signal()
+				node.retryJob(node.workers[i], node.workers[i].currJob)
 			}
 		}
 		node.mu.Unlock()
