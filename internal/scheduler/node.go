@@ -30,17 +30,18 @@ func (node *Node) pushJob(job *Job) {
 
 }
 
+// TODO: fix up with heap for timing.
 func (node *Node) pullJob() *Job {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 
-	for len(node.tasks) == 0 {
-		node.cond.Wait()
+	for {
+		for i, job := range node.tasks {
+			if time.Now().After(job.readyAt) {
+				node.tasks = append(node.tasks[:i], node.tasks[i+1:]...)
+			}
+		}
 	}
-
-	job := node.tasks[0]
-	node.tasks = node.tasks[1:]
-	return job
 }
 
 // won't need lock
@@ -56,6 +57,8 @@ func (node *Node) retryJob(worker *Worker, job *Job) {
 		return
 	}
 
+	// backoff, wait until requeuing job
+	job.readyAt = time.Now().Add(50 * time.Millisecond)
 	job.state = StatePending
 	job.epoch++
 	node.tasks = append(node.tasks, job)
