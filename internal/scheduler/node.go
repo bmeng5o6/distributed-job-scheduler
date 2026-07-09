@@ -1,45 +1,49 @@
 package scheduler
 
 import (
+	"container/heap"
 	"sync"
 	"time"
 )
 
 type Node struct {
-	tasks     []*Job
-	deadTasks []*Job
-	workers   []*Worker
-	mu        sync.Mutex
-	cond      *sync.Cond
-	wg        sync.WaitGroup
+	tasks       jobHeap
+	deadTasks   []*Job
+	workers     []*Worker
+	mu          sync.Mutex
+	cond        *sync.Cond
+	wg          sync.WaitGroup
+	timer       *time.Timer
+	maxAttempts int
+	baseBackoff time.Duration
+	done        chan struct{}
 }
 
 func newNode(tasks []*Job, workers []*Worker) *Node {
-	n := &Node{tasks: tasks, workers: workers}
+	n := &Node{
+		tasks:       jobHeap(tasks),
+		workers:     workers,
+		maxAttempts: 3,
+		baseBackoff: 50 * time.Millisecond,
+		done:        make(chan struct{}),
+	}
+	heap.Init(&n.tasks)
 	n.cond = sync.NewCond(&n.mu)
 	return n
 }
 
-func (node *Node) pushJob(job *Job) {
-	node.mu.Lock()
-	defer node.mu.Unlock()
-	node.tasks = append(node.tasks, job)
-
-	// signal to wake sleeping workers
-	node.cond.Signal()
-}
-
-// TODO: fix up with heap for timing.
 func (node *Node) pullJob() *Job {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 
 	for {
-		for i, job := range node.tasks {
-			if time.Now().After(job.readyAt) {
-				node.tasks = append(node.tasks[:i], node.tasks[i+1:]...)
-				return job
-			}
+		select {
+		case <-node.done:
+			return nil
+		default:
+		}
+		if len(node.tasks) > 0 && time.Now().After(node.tasks[0].readyAt) {
+			return heap.Pop(&node.tasks).(*Job)
 		}
 		node.cond.Wait()
 	}
@@ -59,16 +63,20 @@ func (node *Node) retryJob(worker *Worker, job *Job) {
 	}
 
 	// backoff, wait until requeuing job
-	job.readyAt = time.Now().Add(50 * time.Millisecond)
+	backoff := node.baseBackoff * time.Duration(1<<(job.attempt-1))
+	job.readyAt = time.Now().Add(backoff)
 	job.state = StatePending
 	job.epoch++
-	node.tasks = append(node.tasks, job)
+	heap.Push(&node.tasks, job)
 	node.cond.Signal()
 }
 
 func (node *Node) runWorker(worker *Worker) {
 	for {
 		currJob := node.pullJob()
+		if currJob == nil {
+			return
+		}
 
 		// epoch is used to stop jobs from being marked done more than once.
 		// checks whether the epoch of job matches epoch of worker.
@@ -120,14 +128,27 @@ func (node *Node) start() {
 
 func (node *Node) monitor(timeout time.Duration, interval time.Duration) {
 	for {
-		node.mu.Lock()
-		for i := range node.workers {
-			lastBeat := node.workers[i].lastBeat
-			if time.Since(lastBeat) > timeout && node.workers[i].currJob != nil {
-				node.retryJob(node.workers[i], node.workers[i].currJob)
+		select {
+		case <-node.done:
+			return
+		default:
+			node.mu.Lock()
+			for i := range node.workers {
+				lastBeat := node.workers[i].lastBeat
+				if time.Since(lastBeat) > timeout && node.workers[i].currJob != nil {
+					node.retryJob(node.workers[i], node.workers[i].currJob)
+				}
 			}
+			node.cond.Broadcast()
+			node.mu.Unlock()
 		}
-		node.mu.Unlock()
 		time.Sleep(interval)
 	}
+}
+
+func (node *Node) stop() {
+	close(node.done)
+	node.mu.Lock()
+	node.cond.Broadcast()
+	node.mu.Unlock()
 }

@@ -54,6 +54,7 @@ func TestScheduler_WorkerDeath(t *testing.T) {
 	currNode := newNode(jobList, workerList)
 	currNode.wg.Add(len(jobList))
 	currNode.start()
+	defer currNode.stop()
 
 	time.Sleep(30 * time.Millisecond)
 	currNode.mu.Lock()
@@ -96,6 +97,7 @@ func TestScheduler_RetryAndDeadLetter(t *testing.T) {
 	currNode := newNode(jobList, workerList)
 	currNode.wg.Add(len(jobList))
 	currNode.start()
+	defer currNode.stop()
 	currNode.wg.Wait()
 
 	if retryJob.state != StateDone {
