@@ -27,7 +27,6 @@ func (node *Node) pushJob(job *Job) {
 
 	// signal to wake sleeping workers
 	node.cond.Signal()
-
 }
 
 // TODO: fix up with heap for timing.
@@ -39,8 +38,10 @@ func (node *Node) pullJob() *Job {
 		for i, job := range node.tasks {
 			if time.Now().After(job.readyAt) {
 				node.tasks = append(node.tasks[:i], node.tasks[i+1:]...)
+				return job
 			}
 		}
+		node.cond.Wait()
 	}
 }
 
