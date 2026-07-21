@@ -15,6 +15,7 @@ type Node struct {
 	wg          sync.WaitGroup
 	timer       *time.Timer
 	maxAttempts int
+	requeues    int
 	baseBackoff time.Duration
 	done        chan struct{}
 }
@@ -49,13 +50,12 @@ func (node *Node) pullJob() *Job {
 	}
 }
 
-// won't need lock
+// won't need lock, requeue job
 func (node *Node) retryJob(worker *Worker, job *Job) {
 	job.attempt++
 	worker.currJob = nil
 
-	// max number of retries is 3
-	if job.attempt >= 3 {
+	if job.attempt >= node.maxAttempts {
 		job.state = StateFailed
 		node.deadTasks = append(node.deadTasks, job)
 		node.wg.Done()
