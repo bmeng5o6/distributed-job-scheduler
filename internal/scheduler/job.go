@@ -10,6 +10,7 @@ type Job struct {
 	duration  time.Duration
 	epoch     int
 	attempt   int
+	requeues  int
 	failCount int // number of times a job needs to be run to succeed. This is an attempt at running an actual job.
 	readyAt   time.Time
 }

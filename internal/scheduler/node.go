@@ -13,9 +13,9 @@ type Node struct {
 	mu          sync.Mutex
 	cond        *sync.Cond
 	wg          sync.WaitGroup
-	timer       *time.Timer
+	workerWg    sync.WaitGroup
 	maxAttempts int
-	requeues    int
+	maxRequeues int
 	baseBackoff time.Duration
 	done        chan struct{}
 }
@@ -25,6 +25,7 @@ func newNode(tasks []*Job, workers []*Worker) *Node {
 		tasks:       jobHeap(tasks),
 		workers:     workers,
 		maxAttempts: 3,
+		maxRequeues: 5,
 		baseBackoff: 50 * time.Millisecond,
 		done:        make(chan struct{}),
 	}
@@ -50,21 +51,42 @@ func (node *Node) pullJob() *Job {
 	}
 }
 
-// won't need lock, requeue job
-func (node *Node) retryJob(worker *Worker, job *Job) {
+func (node *Node) failJob(worker *Worker, job *Job) {
 	job.attempt++
 	worker.currJob = nil
 
 	if job.attempt >= node.maxAttempts {
-		job.state = StateFailed
-		node.deadTasks = append(node.deadTasks, job)
-		node.wg.Done()
+		node.deadLetter(job)
 		return
 	}
 
-	// backoff, wait until requeuing job
-	backoff := node.baseBackoff * time.Duration(1<<(job.attempt-1))
-	job.readyAt = time.Now().Add(backoff)
+	node.requeue(job, job.attempt)
+}
+
+func (node *Node) requeueJob(worker *Worker, job *Job) {
+	job.requeues++
+	worker.currJob = nil
+
+	if job.requeues >= node.maxRequeues {
+		node.deadLetter(job)
+		return
+	}
+
+	node.requeueAfter(job, node.baseBackoff)
+}
+
+func (node *Node) deadLetter(job *Job) {
+	job.state = StateFailed
+	node.deadTasks = append(node.deadTasks, job)
+	node.wg.Done()
+}
+
+func (node *Node) requeue(job *Job, n int) {
+	node.requeueAfter(job, node.baseBackoff*time.Duration(1<<(n-1)))
+}
+
+func (node *Node) requeueAfter(job *Job, delay time.Duration) {
+	job.readyAt = time.Now().Add(delay)
 	job.state = StatePending
 	job.epoch++
 	heap.Push(&node.tasks, job)
@@ -72,6 +94,8 @@ func (node *Node) retryJob(worker *Worker, job *Job) {
 }
 
 func (node *Node) runWorker(worker *Worker) {
+	defer node.workerWg.Done()
+
 	for {
 		currJob := node.pullJob()
 		if currJob == nil {
@@ -108,7 +132,7 @@ func (node *Node) runWorker(worker *Worker) {
 		node.mu.Lock()
 		if currJob.epoch == currEpoch {
 			if currJob.attempt < currJob.failCount {
-				node.retryJob(worker, currJob)
+				node.failJob(worker, currJob)
 			} else {
 				currJob.state = StateDone
 				worker.currJob = nil
@@ -121,6 +145,7 @@ func (node *Node) runWorker(worker *Worker) {
 
 func (node *Node) start() {
 	for i := range node.workers {
+		node.workerWg.Add(1)
 		go node.runWorker(node.workers[i])
 	}
 	go node.monitor(50*time.Millisecond, 10*time.Millisecond)
@@ -136,7 +161,7 @@ func (node *Node) monitor(timeout time.Duration, interval time.Duration) {
 			for i := range node.workers {
 				lastBeat := node.workers[i].lastBeat
 				if time.Since(lastBeat) > timeout && node.workers[i].currJob != nil {
-					node.retryJob(node.workers[i], node.workers[i].currJob)
+					node.requeueJob(node.workers[i], node.workers[i].currJob)
 				}
 			}
 			node.cond.Broadcast()

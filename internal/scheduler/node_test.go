@@ -86,10 +86,10 @@ func TestScheduler_RetryAndDeadLetter(t *testing.T) {
 	jobList, workerList := []*Job{}, []*Worker{}
 
 	retryJob := newJob("retry", 100*time.Millisecond, 2)
-	failJob := newJob("fail", 100*time.Millisecond, 10)
+	failedJob := newJob("fail", 100*time.Millisecond, 10)
 
 	jobList = append(jobList, retryJob)
-	jobList = append(jobList, failJob)
+	jobList = append(jobList, failedJob)
 
 	workerList = append(workerList, newWorker("worker one"))
 	workerList = append(workerList, newWorker("worker two"))
@@ -104,11 +104,44 @@ func TestScheduler_RetryAndDeadLetter(t *testing.T) {
 		t.Errorf("Retry job: expected done, got %s", retryJob.state)
 	}
 
-	if failJob.state != StateFailed {
+	if failedJob.state != StateFailed {
 		t.Errorf("Fail job: expected fail, got %s", retryJob.state)
 	}
 
 	if len(currNode.deadTasks) != 1 {
 		t.Errorf("Expected one dead task, got %d", len(currNode.deadTasks))
+	}
+}
+
+func TestScheduler_DeathDoesNotUseRetryBudget(t *testing.T) {
+	job := newJob("stay", 50*time.Millisecond, 0) // would succeed first try
+	workers := []*Worker{newWorker("w1"), newWorker("w2")}
+
+	n := newNode([]*Job{job}, workers)
+	n.wg.Add(1)
+	n.start()
+	defer n.stop()
+
+	// kill whichever worker grabs it
+	time.Sleep(20 * time.Millisecond)
+	n.mu.Lock()
+	for _, w := range workers {
+		if w.currJob != nil {
+			w.alive = false
+			break
+		}
+	}
+	n.mu.Unlock()
+
+	n.wg.Wait()
+
+	if job.state != StateDone {
+		t.Errorf("expected done, got %s", job.state)
+	}
+	if job.attempt != 0 {
+		t.Errorf("death should not bump attempt, got %d", job.attempt)
+	}
+	if job.requeues == 0 {
+		t.Error("expected requeues to be bumped by death")
 	}
 }
